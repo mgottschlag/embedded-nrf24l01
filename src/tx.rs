@@ -1,4 +1,4 @@
-use crate::command::WriteTxPayload;
+use crate::command::{FlushTx, WriteTxPayload};
 use crate::config::Configuration;
 use crate::device::Device;
 use crate::registers::{FifoStatus, ObserveTx, Status};
@@ -59,7 +59,43 @@ impl<D: Device> TxMode<D> {
         Ok(())
     }
 
-    /// Wait until FX FIFO is empty
+    /// Poll completion of one or multiple send operations and check whether transmission was
+    /// successful.
+    ///
+    /// This function behaves like `wait_empty()`, except that it returns whether sending was
+    /// successful and that it provides an asynchronous interface.
+    pub fn poll_send(&mut self) -> nb::Result<bool, D::Error> {
+        let (status, fifo_status) = self.device.read_register::<FifoStatus>()?;
+        // We need to clear all the TX interrupts whenever we return Ok here so that the next call
+        // to poll_send correctly recognizes max_rt and send completion.
+        if status.max_rt() {
+            // If MAX_RT is set, the packet is not removed from the FIFO, so if we do not flush
+            // the FIFO, we end up in an infinite loop
+            self.device.send_command(&FlushTx)?;
+            self.clear_interrupts_and_ce()?;
+            Ok(false)
+        } else if fifo_status.tx_empty() {
+            self.clear_interrupts_and_ce()?;
+            Ok(true)
+        } else {
+            self.device.ce_enable();
+            Err(nb::Error::WouldBlock)
+        }
+    }
+
+    fn clear_interrupts_and_ce(&mut self) -> nb::Result<(), D::Error> {
+        let mut clear = Status(0);
+        clear.set_tx_ds(true);
+        clear.set_max_rt(true);
+        self.device.write_register(clear)?;
+
+        // Can save power now
+        self.device.ce_disable();
+
+        Ok(())
+    }
+
+    /// Wait until TX FIFO is empty
     pub fn wait_empty(&mut self) -> Result<(), D::Error> {
         let mut empty = false;
         while !empty {
