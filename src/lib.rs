@@ -135,8 +135,11 @@ impl<E: Debug, CE: OutputPin<Error = E>, CSN: OutputPin<Error = E>, SPI: SpiTran
         command.encode(buf);
 
         // SPI transaction
+        cortex_m::asm::delay(200);
         self.csn.set_low().unwrap();
+        cortex_m::asm::delay(200);
         let transfer_result = self.spi.transfer(buf).map(|_| {});
+        cortex_m::asm::delay(200);
         self.csn.set_high().unwrap();
         // Propagate Err only after csn.set_high():
         transfer_result?;
